@@ -1,0 +1,6 @@
+.venv/
+.pio/
+.pio-core/
+include/LocalConfig.h
+.vscode/.browse.c_cpp.db*
+__pycache__/
