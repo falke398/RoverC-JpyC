@@ -182,6 +182,17 @@ cutoff/watchdog is a separate scope decision.
 
 ## Verification log
 
+- 2026-11-08: Faster builds. Project sits on a network share, so PlatformIO
+  `core_dir`, `build_dir` and `libdeps_dir` now point at
+  `%LOCALAPPDATA%/M5RoverTools/{pio-core,pio-build/m5rover,pio-libdeps/m5rover}`
+  (core seeded from the old `.pio-core`). Cold builds after `-t clean`: controller
+  51.4 s (was 2m28s), rover 50.2 s (was 2m22s); a no-change rebuild is still ~18.7 s.
+  Both new builds uploaded successfully (controller COM7, rover COM8; logs in
+  `.pio/new-*-upload.log`, the controller log came out empty but the summary shows
+  SUCCESS). No firmware source or LocalConfig change. User reports both displays
+  work, but the rover does not move after arming. Cause not yet diagnosed: rover
+  Fault/I2C/Wheels, controller Link/Joy values and base power are still to be
+  read. Keep wheels raised while investigating.
 - 2026-11-01: Captured .pio/stick-swap-close80-upload.log confirms both builds
   succeeded (controller 2m28s, rover 2m22s), followed by successful COM7 and COM8
   uploads and the final BOTH STICK-SWAP AND CLOSE80 UPLOADS SUCCEEDED marker.
@@ -506,6 +517,10 @@ cutoff/watchdog is a separate scope decision.
 - Local calibration uses a two-second B hold, 50 stable samples and NVS storage.
 - I2C/configuration faults remain latched across timeout and disarm packets;
   recovery requires repair and reboot. Local stop/link faults require rearming.
+- 2026-11-08: PlatformIO core, build and library dependency directories live on
+  local disk (`%LOCALAPPDATA%/M5RoverTools`) because small-file I/O on the network
+  share dominated build time. Source, logs and the Zig cache stay in the workspace.
+  Native tests (~14 s) were left on Zig.
 
 ## References
 

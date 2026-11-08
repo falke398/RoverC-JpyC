@@ -39,6 +39,12 @@ InvertSideways remains true. Remaining safety checks are pending. Forward/back
 and saved calibration are unchanged; horizontal inputs retain their matching
 physical-axis centers when their roles are swapped.
 
+2026-11-08: build directories moved to local disk (see below); cold builds now take
+about 50 s per role instead of about 2.5 minutes. Both rebuilt firmwares were
+uploaded (COM7, COM8) and both displays work, but the user reports the rover does
+not move after arming. This is not yet diagnosed; check rover Fault/I2C/Wheels, the
+controller Link/Joy values and the RoverC base power before changing code.
+
 ## Layout
 
 | Location | Purpose |
@@ -74,9 +80,11 @@ uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
 ```
 
 Do not recreate an existing working environment unnecessarily. The local
-environment was bootstrapped during development. PlatformIO stores its downloaded
-SDKs and packages in `.pio-core`; builds and the native compiler cache use `.pio`.
-These and `.venv` are ignored by Git. The first builds need Internet access.
+environment was bootstrapped during development. To keep firmware builds fast on a
+network share, PlatformIO's SDKs/packages, build output and library dependencies
+live under `%LOCALAPPDATA%/M5RoverTools` (`pio-core`, `pio-build`, `pio-libdeps`;
+see `platformio.ini`). Logs and the native compiler cache use `.pio`. `.pio` and
+`.venv` are ignored by Git. The first builds need Internet access.
 
 Windows native tests prefer Zig 0.13.0 installed under
 `%LOCALAPPDATA%/M5RoverTools/zig-0.13.0/ziglang`, falling back to Zig in the
