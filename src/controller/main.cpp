@@ -1,11 +1,14 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <ProjectConfig.h>
+#include <DisplayUi.h>
 #include <Hardware.h>
 #include <RadioLink.h>
 #include <algorithm>
 
 namespace {
+M5Canvas canvas(&M5.Display);
+bool canvasReady = false;
 hardware::Hat hat;
 hardware::JoyState joy;
 RadioLink radio;
@@ -88,7 +91,7 @@ void sampleCalibration() {
     }
     if (!storageReady || preferences.putBytes("centers", candidate.data(), sizeof(candidate)) != sizeof(candidate)) {
         calibrated = false;
-        calibrationMessage = "Calibration save failed";
+        calibrationMessage = "Calibration not saved";
         return;
     }
     calibration = candidate;
@@ -168,20 +171,45 @@ void controls(uint32_t now) {
 }
 
 void display(uint32_t now) {
-    M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.printf("JOYC  %s  %u%%\n", confirmed ? "ARMED" : "DISARMED", cap);
-    M5.Lcd.printf("Link:%s Fault:%u\n", linked(now) ? "OK" : "LOST", unsigned(status.fault));
-    M5.Lcd.setTextSize(1);
-    M5.Lcd.printf("MAC %s\n", WiFi.macAddress().c_str());
-    M5.Lcd.printf("Radio: %s\n", radio.error());
-    M5.Lcd.printf("Joy:%s raw %u %u %u %u btn:%02X\n", inputGood ? "OK" : "ERROR",
-        joy.axes[0], joy.axes[1], joy.axes[2], joy.axes[3], joy.buttons);
-    M5.Lcd.printf("Move %d %d %d Grip:%u\n", motion.sideways, motion.forward, motion.turn, unsigned(grip));
-    M5.Lcd.printf("Motion:%s Grip:%s\n", local::MotionCommissioned ? "enabled" : "locked",
-        local::GripperCommissioned ? "enabled" : "locked");
-    M5.Lcd.printf("%s\n", calibrationMessage);
-    M5.Lcd.setTextSize(2);
+    LovyanGFX& g = canvasReady ? static_cast<LovyanGFX&>(canvas) : static_cast<LovyanGFX&>(M5.Display);
+    const bool isLinked = linked(now);
+    const bool roverFault = isLinked && status.fault != control::Fault::None;
+    const char* label = "DISARMED";
+    uint16_t color = ui::Amber;
+    if (confirmed) {
+        label = "ARMED";
+        color = ui::Green;
+    } else if (!isLinked) {
+        label = "NO LINK";
+        color = ui::Red;
+    } else if (roverFault) {
+        label = "FAULT";
+        color = ui::Red;
+    }
+    g.fillScreen(ui::Black);
+    ui::header(g, "JOYC", label, color);
+    const struct { const char* name; int value; int range; bool isSigned; } rows[] = {
+        {"SPEED", cap, 60, false}, {"FWD", motion.forward, 100, true},
+        {"TURN", motion.turn, 100, true}, {"CRAB", motion.sideways, 100, true}};
+    int y = 38;
+    for (const auto& row : rows) {
+        ui::text(g, row.name, 6, y + 5, textdatum_t::middle_left, ui::White, &fonts::Font0);
+        ui::bar(g, 44, y, 84, 10, row.value, row.range, row.isSigned);
+        y += 24;
+    }
+    y += 6;
+    ui::statusRow(g, y, isLinked, isLinked ? "Link OK" : "No link");
+    ui::statusRow(g, y + 20, radio.ready(), radio.ready() ? "Radio OK" : "Radio ERR");
+    ui::statusRow(g, y + 40, inputGood, inputGood ? "Joy OK" : "Joy ERROR");
+    int line = 202;
+    ui::text(g, calibrationMessage, 2, line, textdatum_t::middle_left, ui::Grey, &fonts::Font0);
+    if (!radio.ready()) ui::text(g, radio.error(), 2, line += 12, textdatum_t::middle_left, ui::Red, &fonts::Font0);
+    if (roverFault) {
+        char text[24];
+        snprintf(text, sizeof(text), "Rover fault:%u", unsigned(status.fault));
+        ui::text(g, text, 2, line + 12, textdatum_t::middle_left, ui::Red, &fonts::Font0);
+    }
+    if (canvasReady) canvas.pushSprite(0, 0);
     Serial.printf("Joy valid=%d raw=%u,%u,%u,%u buttons=%02X calibrated=%d link=%d armed=%d\n",
         inputGood, joy.axes[0], joy.axes[1], joy.axes[2], joy.axes[3], joy.buttons,
         calibrated, linked(now), confirmed);
@@ -200,12 +228,15 @@ void setup() {
     if (M5.Ex_I2C.isEnabled() && M5.Ex_I2C.getPort() != M5.In_I2C.getPort()) {
         M5.Ex_I2C.release();
     }
-    M5.Lcd.setRotation(1);
+    M5.Lcd.setRotation(0);
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.setTextSize(2);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("JOYC starting");
+    M5.Lcd.println("JOYC start");
+    // Allocate before Wi-Fi so the 64 KB sprite finds contiguous heap; otherwise draw directly.
+    canvas.setColorDepth(16);
+    canvasReady = canvas.createSprite(ui::Width, ui::Height) != nullptr;
     inputGood = hat.begin();
     radio.begin(true);
     storageReady = preferences.begin("joyc", false);

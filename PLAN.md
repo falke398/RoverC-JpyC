@@ -182,6 +182,20 @@ cutoff/watchdog is a separate scope decision.
 
 ## Verification log
 
+- 2026-11-08: Display redesign. Documented the old landscape screens
+  (docs/display/current) and proposed five portrait layouts (docs/display). User
+  chose proposal B (dashboard) for the controller and D (top-down wheel view) for
+  the rover, rotated 90 degrees counter-clockwise (portrait, `setRotation(0)`).
+  Implemented in include/DisplayUi.h, src/controller/main.cpp and src/rover/main.cpp
+  with a 135x240 16-bit sprite (falls back to direct drawing). Both builds succeeded
+  with no warnings (controller 45.3 s, flash 71.7%; rover 44.9 s, flash 71.2%) and
+  both uploads succeeded (COM7 and COM8, exit 0; `.pio/display-*.log`). Not yet
+  verified on the devices: screen orientation (try `setRotation(2)` if upside-down),
+  wheel-to-bar mapping (assumed front-left, front-right, rear-left, rear-right),
+  sprite allocation, and legibility. MAC, raw joystick values, Peer/Ack and
+  Motion/Grip flags are no longer on screen; the MAC is in the esptool upload log.
+  Calibration failure text shortened to "Calibration not saved" to fit the width.
+  No control or safety logic changed.
 - 2026-11-08: Faster builds. Project sits on a network share, so PlatformIO
   `core_dir`, `build_dir` and `libdeps_dir` now point at
   `%LOCALAPPDATA%/M5RoverTools/{pio-core,pio-build/m5rover,pio-libdeps/m5rover}`
@@ -521,6 +535,11 @@ cutoff/watchdog is a separate scope decision.
   local disk (`%LOCALAPPDATA%/M5RoverTools`) because small-file I/O on the network
   share dominated build time. Source, logs and the Zig cache stay in the workspace.
   Native tests (~14 s) were left on Zig.
+- 2026-11-08: Displays use portrait (135x240) with a shared header-only helper
+  (`include/DisplayUi.h`) and an off-screen sprite allocated before Wi-Fi starts, so
+  screens update without flicker. Status is conveyed by color plus words/dots, with
+  the full fault name on the rover. Diagnostic detail was removed from the screens
+  by design; proposal C (two pages) is the fallback if it is needed again.
 
 ## References
 

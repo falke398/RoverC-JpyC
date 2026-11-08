@@ -1,11 +1,14 @@
 #include <M5Unified.h>
 #include <ProjectConfig.h>
+#include <DisplayUi.h>
 #include <Hardware.h>
 #include <RadioLink.h>
 #include <algorithm>
 #include <memory>
 
 namespace {
+M5Canvas canvas(&M5.Display);
+bool canvasReady = false;
 hardware::Hat hat;
 RadioLink radio;
 std::unique_ptr<control::Safety> safety;
@@ -82,19 +85,43 @@ void sendStatus() {
 }
 
 void display() {
-    M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.printf("ROVER %s\n", safety->armed() ? "ARMED" : "DISARMED");
-    M5.Lcd.printf("Fault:%u I2C:%s\n", unsigned(safety->fault()), hardwareGood ? "OK" : "ERROR");
-    M5.Lcd.setTextSize(1);
-    M5.Lcd.printf("MAC %s\n", WiFi.macAddress().c_str());
-    M5.Lcd.printf("Radio: %s\n", radio.error());
-    M5.Lcd.printf("Wheels %d %d %d %d\n", applied[0], applied[1], applied[2], applied[3]);
-    M5.Lcd.printf("Motion:%s Grip:%s\n", local::MotionCommissioned ? "enabled" : "locked",
-        local::GripperCommissioned ? "enabled" : "locked");
-    M5.Lcd.printf("Peer %08lX Ack %lu Grip:%u\n", static_cast<unsigned long>(safety->peer()),
-        static_cast<unsigned long>(safety->sequence()), unsigned(appliedGrip));
-    M5.Lcd.setTextSize(2);
+    LovyanGFX& g = canvasReady ? static_cast<LovyanGFX&>(canvas) : static_cast<LovyanGFX&>(M5.Display);
+    const auto fault = safety->fault();
+    const char* label = "DISARMED";
+    uint16_t color = ui::Amber;
+    if (safety->armed()) {
+        label = "ARMED";
+        color = ui::Green;
+    } else if (fault != control::Fault::None) {
+        color = ui::Red;
+        label = fault == control::Fault::Link ? "LINK LOST" : fault == control::Fault::LocalStop ? "LOCAL STOP" :
+            fault == control::Fault::Bus ? "I2C ERROR" : "CONFIG";
+    }
+    const int cap = std::max(1, int(safety->command().cap));
+    char capText[8];
+    snprintf(capText, sizeof(capText), "%d%%", cap);
+    g.fillScreen(ui::Black);
+    ui::header(g, "ROVER", capText, color);
+    ui::text(g, "FRONT", ui::Width / 2, 36, textdatum_t::middle_center, ui::Grey, &fonts::Font0);
+    g.fillRect(56, 46, 24, 151, ui::Dark);
+    g.drawRect(56, 46, 24, 151, ui::Grey);
+    // Wheels follow the mix() order: front-left, front-right, rear-left, rear-right.
+    const struct { int x; int y; } wheels[4] = {{32, 46}, {83, 46}, {32, 136}, {83, 136}};
+    for (size_t index = 0; index < std::size(wheels); ++index) {
+        const int x = wheels[index].x;
+        const int y = wheels[index].y;
+        const int mid = y + 30;
+        const int length = std::clamp(applied[index] * 30 / cap, -30, 30);
+        g.drawRect(x, y, 22, 61, ui::White);
+        if (length > 0) g.fillRect(x + 1, mid - length, 20, length, ui::Green);
+        else if (length < 0) g.fillRect(x + 1, mid, 20, -length, ui::Amber);
+        char speed[8];
+        snprintf(speed, sizeof(speed), "%d", applied[index]);
+        if (index % 2 == 0) ui::text(g, speed, x - 4, mid, textdatum_t::middle_right, ui::White);
+        else ui::text(g, speed, x + 26, mid, textdatum_t::middle_left, ui::White);
+    }
+    ui::text(g, label, ui::Width / 2, 220, textdatum_t::middle_center, color);
+    if (canvasReady) canvas.pushSprite(0, 0);
 }
 }
 
@@ -110,12 +137,15 @@ void setup() {
     if (M5.Ex_I2C.isEnabled() && M5.Ex_I2C.getPort() != M5.In_I2C.getPort()) {
         M5.Ex_I2C.release();
     }
-    M5.Lcd.setRotation(1);
+    M5.Lcd.setRotation(0);
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.setTextSize(2);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("ROVER starting");
+    M5.Lcd.println("ROVER start");
+    // Allocate before Wi-Fi so the 64 KB sprite finds contiguous heap; otherwise draw directly.
+    canvas.setColorDepth(16);
+    canvasReady = canvas.createSprite(ui::Width, ui::Height) != nullptr;
     hardwareGood = hat.begin();
     const bool stopped = hat.motors({});
     hardwareGood = hardwareGood && stopped;

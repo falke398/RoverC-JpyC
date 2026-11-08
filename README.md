@@ -45,6 +45,41 @@ uploaded (COM7, COM8) and both displays work, but the user reports the rover doe
 not move after arming. This is not yet diagnosed; check rover Fault/I2C/Wheels, the
 controller Link/Joy values and the RoverC base power before changing code.
 
+Also 2026-11-08: both displays were redesigned for portrait (135x240, 90 degrees
+counter-clockwise from the old landscape view) and uploaded successfully to COM7 and
+COM8: a dashboard on the controller and a top-down wheel view on the rover. Only
+the build and upload were verified; the physical screen orientation, wheel-to-bar
+mapping and sprite allocation are not yet confirmed on the devices.
+
+## Display screens
+
+Both devices use `setRotation(0)` (portrait). If a screen appears upside-down, use
+`setRotation(2)` in `src/controller/main.cpp` and `src/rover/main.cpp`. Drawing goes
+into a 64 KB off-screen sprite allocated before Wi-Fi starts; if allocation fails the
+code draws directly to the screen. Shared colors and helpers are in
+[include/DisplayUi.h](include/DisplayUi.h).
+
+**Controller (dashboard):** a colored header shows JOYC and the state (ARMED green,
+DISARMED amber, NO LINK/FAULT red). Bars show SPEED (cap, 0..60), FWD, TURN and CRAB
+(signed, -100..100). Rows show Link, Radio and Joy status. The footer shows the
+calibration message, the radio error text if any, and the rover fault number.
+
+**Rover (wheel view):** a colored header shows ROVER and the speed cap. A top-down car
+shows each wheel as a bar with its speed (front-left, front-right, rear-left,
+rear-right, matching the mixing order) and the state word at the bottom: ARMED,
+DISARMED, LINK LOST, LOCAL STOP, I2C ERROR or CONFIG.
+
+The MAC address, raw joystick values, `Peer`/`Ack` counters and Motion/Grip enabled
+flags are no longer shown. The station MAC is printed by esptool during every upload
+(`MAC: ...` in the upload log).
+
+Mockups: [docs/display/](docs/display) holds the portrait proposals (A banner,
+B dashboard, C two pages, D visual, E minimal HUD; chosen: controller B, rover D),
+rendered by `scripts/render_display_mockups.py`. [docs/display/current](docs/display/current)
+shows the earlier landscape screens, rendered by `scripts/render_current_displays.py`
+with sample values and an approximate font. Both scripts need Pillow
+(`requirements-dev.txt`) and run with `.\.venv\Scripts\python.exe scripts\<name>.py`.
+
 ## Layout
 
 | Location | Purpose |
@@ -56,6 +91,9 @@ controller Link/Joy values and the RoverC base power before changing code.
 | [lib/Hardware](lib/Hardware) | Checked HAT I2C transactions |
 | [lib/RadioLink](lib/RadioLink) | ESP-NOW configuration and synchronized mailbox |
 | [include/LocalConfig.example.h](include/LocalConfig.example.h) | Nonfunctional provisioning template |
+| [include/DisplayUi.h](include/DisplayUi.h) | Portrait display colors and drawing helpers |
+| [scripts/render_display_mockups.py](scripts/render_display_mockups.py) | Renders portrait display proposals to docs/display |
+| [scripts/render_current_displays.py](scripts/render_current_displays.py) | Renders the earlier landscape screens to docs/display/current |
 | [test/test_control/test_main.cpp](test/test_control/test_main.cpp) | Native control tests |
 
 ## Development setup
@@ -124,7 +162,8 @@ from Zig's bundled runtime sources did not prevent successful execution.
 .\.venv\Scripts\python.exe -m platformio device monitor -p COM5 -b 115200
 ```
 
-5. Record the **STA MAC** displayed by each device, including which is controller
+5. Record the **STA MAC** of each device (printed as `MAC:` in the esptool upload
+   output), including which is controller
    and which is rover. Default builds have no peer keys and cannot arm. The rover
    attempts motor zero at boot and continues zero writes while disarmed. Do not
    assume a failed I2C zero write stopped the hardware.
@@ -177,7 +216,8 @@ For subsequent adjustments, edit the local header, never the template:
 Build and flash both devices again after changing shared configuration. Replacing
 a device requires new MAC settings. The receiver accepts only the configured
 controller; encryption is not a substitute for the motion safety checks.
-Check `Radio: OK` on both devices and `Link: OK` on the controller. Rover fault 4
+Check green Radio and Link dots on the controller dashboard (the rover shows its
+state word at the bottom). Rover fault 4 (CONFIG on the rover screen)
 remains expected while `MotionCommissioned` is false, even with a working link.
 
 ## Calibration and commissioning
