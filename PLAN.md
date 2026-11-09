@@ -182,6 +182,53 @@ cutoff/watchdog is a separate scope decision.
 
 ## Verification log
 
+- 2026-11-08: Both roles rebuilt and uploaded with the joystick overshoot fix, the
+  debug log and the portrait displays (build exit 0, controller COM7 exit 0, rover
+  COM8 exit 0; logs `.pio/both-*.log`). Controller image 943,885 B (72.0 % of the
+  app slot). Added docs/architecture.html (interactive architecture, module
+  connections, data flows, resource usage, disarm reasons) and
+  scripts/resource_report.py. Heap, CPU load and stack headroom are still
+  unmeasured; the `STAT` log lines provide them. The full-forward test drive after
+  the fix is still pending.
+
+- 2026-11-08: Root cause of the disarms found. The controller footer showed
+  `J:e102 102 201 102 102`: error 102 with axis 1 (left Y, forward) reading 201 at
+  full forward deflection. `AxisMaximum` is 200 and any reading above it counted as
+  a failed read, so full forward disarmed the controller (after the 100 ms grace).
+  Earlier full-travel checks had not reached 201. Fix: `Hat::joy` now accepts
+  readings up to `AxisMaximum + settings::AxisTolerance` (10) and clamps them to
+  `AxisMaximum`; anything larger still fails, so I2C garbage such as 0xFF cannot
+  become full deflection. The retry and 100 ms grace from the earlier attempt stay.
+  Built and uploaded to COM7 only. Not yet verified in a test drive at full forward.
+- 2026-11-08: After the retry/100 ms grace fix the controller still disarmed after
+  driving for a while, again with `Off: joy read failed`, so the joystick read
+  fails for longer than 100 ms. Still no serial log. Candidates: an axis reading
+  above `AxisMaximum` (200) at an extreme or corner stick position (error 102), or
+  a stuck/lost I2C bus (errors 1..5, 101). The controller now also records the I2C
+  error code and raw axes at the failure and shows them as `J:e<err> a b c d` on
+  the last footer line after a joystick disarm. Built and uploaded to COM7
+  (exit 0). Awaiting that line from the next test.
+- 2026-11-08: Test drive reproduced the disconnect twice. The controller footer
+  showed `Off: joy read failed` and the rover showed `Off: cmd disarm (4)`, so the
+  controller disarmed because its joystick I2C read failed; the radio link and the
+  rover were not the cause. No serial log was captured, so the I2C error code is
+  unknown. Fix: the controller retries a failed joystick read once, and a dropout
+  shorter than `settings::JoyGrace` (100 ms) sends neutral motion and keeps the
+  arm instead of disarming; clicks are ignored during a failed read. Longer
+  dropouts still disarm. Built and uploaded to COM7 only (rover unchanged). Not yet
+  verified in a test drive. If it still disarms, capture the serial log (`JOY FAIL
+  err=N`) to find the cause.
+- 2026-11-08: Debug log added after the user reported that the link works for a
+  while after arming and then disarms. Cause not yet known. Candidates, all
+  visible in the new log: a single I2C failure latching rover Fault 3, a joystick
+  read failure disarming the controller, the 300 ms status/ack or 250 ms command
+  timeouts being exceeded (radio loss or loop stalls), a rover brownout/reboot
+  under motor load, or a display redraw stalling the control loop. Every disarm now
+  logs its reason and counters; a `STAT` line is printed every second; radio and
+  I2C counters were added; the screens show the last disarm reason and the rover's
+  reset reason. See README "Debug log". Builds succeeded for both roles; firmware
+  flash size 71.5% (rover). No control or safety behavior changed. Awaiting a
+  captured log from the failing session.
 - 2026-11-08: Display redesign. Documented the old landscape screens
   (docs/display/current) and proposed five portrait layouts (docs/display). User
   chose proposal B (dashboard) for the controller and D (top-down wheel view) for

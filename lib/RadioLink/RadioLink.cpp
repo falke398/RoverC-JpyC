@@ -50,18 +50,28 @@ bool RadioLink::begin(bool controller) {
 
 void RadioLink::onReceive(const uint8_t* mac, const uint8_t* data, int length) {
     auto* link = instance_;
-    if (!link || length != int(control::PacketSize) || memcmp(mac, link->peer_, 6) != 0) return;
+    if (!link) return;
+    if (length != int(control::PacketSize) || memcmp(mac, link->peer_, 6) != 0) {
+        portENTER_CRITICAL(&link->mutex_);
+        ++link->stats_.dropped;
+        portEXIT_CRITICAL(&link->mutex_);
+        return;
+    }
     portENTER_CRITICAL(&link->mutex_);
+    if (link->pending_) ++link->stats_.overwritten;
+    ++link->stats_.received;
     memcpy(link->mailbox_.data(), data, control::PacketSize);
     link->received_ = millis();
     link->pending_ = true;
     portEXIT_CRITICAL(&link->mutex_);
 }
 
-void RadioLink::onSent(const uint8_t*, esp_now_send_status_t) {
+void RadioLink::onSent(const uint8_t*, esp_now_send_status_t result) {
     if (!instance_) return;
     portENTER_CRITICAL(&instance_->mutex_);
     instance_->sending_ = false;
+    if (result == ESP_NOW_SEND_SUCCESS) ++instance_->stats_.ackOk;
+    else ++instance_->stats_.ackFail;
     portEXIT_CRITICAL(&instance_->mutex_);
 }
 
@@ -69,15 +79,29 @@ bool RadioLink::send(const control::Packet& packet) {
     if (!ready_ || !control::valid(packet)) return false;
     portENTER_CRITICAL(&mutex_);
     const bool busy = sending_;
-    if (!busy) sending_ = true;
+    if (busy) ++stats_.busy;
+    else sending_ = true;
     portEXIT_CRITICAL(&mutex_);
     if (busy) return false;
     const auto bytes = control::encode(packet);
-    if (esp_now_send(peer_, bytes.data(), bytes.size()) == ESP_OK) return true;
+    if (esp_now_send(peer_, bytes.data(), bytes.size()) == ESP_OK) {
+        portENTER_CRITICAL(&mutex_);
+        ++stats_.sent;
+        portEXIT_CRITICAL(&mutex_);
+        return true;
+    }
     portENTER_CRITICAL(&mutex_);
     sending_ = false;
+    ++stats_.failed;
     portEXIT_CRITICAL(&mutex_);
     return false;
+}
+
+RadioLink::Stats RadioLink::stats() {
+    portENTER_CRITICAL(&mutex_);
+    const Stats copy = stats_;
+    portEXIT_CRITICAL(&mutex_);
+    return copy;
 }
 
 bool RadioLink::receive(control::Packet& packet, uint32_t& received) {

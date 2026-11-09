@@ -12,6 +12,10 @@ constexpr uint32_t ControlInterval = 20;
 constexpr uint32_t StatusInterval = 100;
 constexpr uint32_t DisplayInterval = 200;
 constexpr uint32_t ServoInterval = 50;
+// Joystick I2C dropouts shorter than this send neutral motion instead of disarming.
+constexpr uint32_t JoyGrace = 100;
+// Raw axis readings up to AxisMaximum + this are clamped (full deflection read 201); larger ones fail.
+constexpr int AxisTolerance = 10;
 constexpr uint8_t Address = 0x38;
 constexpr int Sda = 0;
 constexpr int Scl = 26;

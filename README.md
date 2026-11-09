@@ -80,6 +80,55 @@ shows the earlier landscape screens, rendered by `scripts/render_current_display
 with sample values and an approximate font. Both scripts need Pillow
 (`requirements-dev.txt`) and run with `.\.venv\Scripts\python.exe scripts\<name>.py`.
 
+## Debug log
+
+Both firmwares write a timestamped one-line log to USB serial (115200 baud). Connect
+the device and run one monitor per port (close it before uploading):
+
+```powershell
+.\.venv\Scripts\python.exe -m platformio device monitor -p COM7 -b 115200 -f log2file
+```
+
+Use COM7 for the controller and COM8 for the rover. `-f log2file` also saves the
+output to `platformio-device-monitor-*.log` in the project folder (ignored by Git).
+The controller is handheld, so tethering it while driving is practical; monitor the
+rover on the bench with the wheels raised, or tether both from two terminals.
+
+Line types (`[ms]` is milliseconds since boot):
+
+| Line | Meaning |
+| --- | --- |
+| `BOOT` | Reset reason (`POWERON`, `BROWNOUT`, `PANIC`, ...), free heap, display buffer, I2C and radio status. A rover `BROWNOUT` or repeated boots points to power. |
+| `ARM requested` / `ARM confirmed` (controller), `ARMED` (rover) | Arming steps. |
+| `DISARM reason=...` | Every armed-to-disarmed transition with the cause and the counters at that moment. |
+| `ROVER BOOT`, `ROVER FAULT a->b` | The controller saw the rover reboot or change fault. |
+| `JOY FAIL err=N`, `JOY recovered after N ms` (controller) | Joystick I2C read failed twice in a row / worked again. Dropouts shorter than 100 ms (`settings::JoyGrace`) send neutral motion and keep the arm; longer ones disarm with `joy read failed`. |
+| `I2C FAIL motors/stop/servo err=N` | RoverC write failed. `err` is the Wire status (1 length, 2 NACK on address, 3 NACK on data, 4 other, 5 timeout) or 100 queue, 101 short read, 102 axis range, 103 bad argument. A rover I2C failure latches Fault 3 until reboot. |
+| `STAT` (every second) | Link and health counters, see below. |
+
+Disarm reasons: controller `radio not ready`, `motion locked`, `joy read failed`,
+`not calibrated`, `calibrating`, `no rover status`, `status timeout` (no rover status
+for 300 ms), `ack stalled` (status arrives but the rover stopped acknowledging
+commands), `rx mismatch`, `rover fault`, `rover rebooted`, `rover refused`, `button A`,
+`calibration`. Rover `button A`, `i2c fault`, `config`, `cmd timeout` (no command for
+250 ms), `peer changed`, `cmd disarm` (the controller sent disarm).
+
+`STAT` fields: `stAge`/`ackAge` ms since the last rover status / acknowledgement
+progress (limit 300); `cmdAge` ms since the rover accepted a command (limit 250);
+`rx`/`tx` packets received/sent; `drop` wrong sender or length; `over` mailbox packet
+replaced before it was read; `busy` send skipped because one was outstanding;
+`txFail` send call failed; `ackOk`/`ackFail` MAC-level delivery results; `acc`/`rej`
+rover accepted/rejected commands; `joyFail`/`i2cFail` + `joyErr`/`i2cErr` I2C failure
+count and last code; `gapMax` longest control-loop gap in the last second (ideal 20
+ms); `dispMax` longest display redraw; `heap`/`minHeap` free and lowest free heap.
+
+On screen, the controller footer shows `Off: <reason> (count)` for the last disarm.
+After a `joy read failed` disarm its last line shows `J:e<err> a b c d`: the I2C
+error code (see the `I2C FAIL` table; 102 means an axis above `AxisMaximum` plus
+`settings::AxisTolerance`) and the
+raw axes at the failure. The rover shows the same `Off:` line plus `rst:<reset reason> up:<seconds>`. A small `up`
+value or a `BROWNOUT` reset on the rover means it rebooted.
+
 ## Layout
 
 | Location | Purpose |
@@ -92,6 +141,9 @@ with sample values and an approximate font. Both scripts need Pillow
 | [lib/RadioLink](lib/RadioLink) | ESP-NOW configuration and synchronized mailbox |
 | [include/LocalConfig.example.h](include/LocalConfig.example.h) | Nonfunctional provisioning template |
 | [include/DisplayUi.h](include/DisplayUi.h) | Portrait display colors and drawing helpers |
+| [include/DebugLog.h](include/DebugLog.h) | Timestamped serial log and reset-reason helper |
+| [docs/architecture.html](docs/architecture.html) | Interactive architecture, data flows, resource usage and disarm reasons (open in a browser) |
+| [scripts/resource_report.py](scripts/resource_report.py) | Prints section and origin sizes of the built firmware ELFs as JSON (feeds the resource figures in architecture.html) |
 | [scripts/render_display_mockups.py](scripts/render_display_mockups.py) | Renders portrait display proposals to docs/display |
 | [scripts/render_current_displays.py](scripts/render_current_displays.py) | Renders the earlier landscape screens to docs/display/current |
 | [test/test_control/test_main.cpp](test/test_control/test_main.cpp) | Native control tests |

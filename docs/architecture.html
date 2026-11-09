@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoyC / RoverC software architecture and resource usage</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1b2028; --panel2: #232a35; --line: #38414f; --text: #e6e9ee; --dim: #9aa4b2;
+    --accent: #4da3ff; --green: #2fc77a; --amber: #ffb020; --red: #e5484d; --step: #4da3ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef1f6; --line: #cdd4de; --text: #1c2330; --dim: #5a6577;
+            --accent: #0a62d0; --green: #12904f; --amber: #b87400; --red: #c4262b; --step: #0a62d0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px 8px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--dim); }
+  nav { display: flex; gap: 4px; padding: 8px 24px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav button { background: none; border: 1px solid transparent; border-bottom: none; color: var(--dim); padding: 8px 14px;
+               border-radius: 6px 6px 0 0; cursor: pointer; font: inherit; }
+  nav button.active { background: var(--panel); color: var(--text); border-color: var(--line); }
+  main { padding: 18px 24px 40px; max-width: 1280px; }
+  section.tab { display: none; }
+  section.tab.active { display: block; }
+  .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .muted { color: var(--dim); }
+  .small { font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 14px; }
+  .chip { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 14px; padding: 4px 12px;
+          cursor: pointer; font: inherit; }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* architecture */
+  .arch { display: grid; grid-template-columns: 1fr 190px 1fr; gap: 14px 38px; flex: 1 1 760px; min-width: 640px; position: relative; }
+  .col.c { padding-left: 58px; }
+  .col.r { padding-right: 58px; }
+  .col h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .node { position: relative; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line);
+          border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; transition: opacity .15s, border-color .15s; }
+  .node b { display: block; }
+  .node span { color: var(--dim); font-size: 12px; }
+  .node.hw { border-left-color: var(--amber); }
+  .node.lib { border-left-color: var(--accent); }
+  .node.app { border-left-color: var(--green); }
+  .node.ext { border-left-color: #a371f7; }
+  .node.link { border-left-color: var(--red); text-align: center; }
+  .dim .node { opacity: .28; }
+  .dim .node.on { opacity: 1; border-color: var(--step); box-shadow: 0 0 0 1px var(--step); }
+  .node.sel { outline: 2px solid var(--accent); }
+  .node.nb { border-color: var(--accent); }
+  svg.edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 0; }
+  svg.edges .e { fill: none; stroke: var(--dim); stroke-width: 1.5; opacity: .55; }
+  svg.edges .e.bus { stroke-dasharray: 2 3; }
+  svg.edges .e.faint { opacity: .3; }
+  svg.edges .e.on { stroke: var(--accent); stroke-width: 2.5; opacity: 1; }
+  svg.edges .e.flow { stroke: var(--step); stroke-width: 3; opacity: 1; stroke-dasharray: 7 5; animation: flow .8s linear infinite; }
+  svg.edges .hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; }
+  svg.edges circle { fill: var(--dim); opacity: .7; }
+  svg.edges circle.on { fill: var(--accent); opacity: 1; }
+  svg.edges text { font-size: 11px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+  @keyframes flow { to { stroke-dashoffset: -24; } }
+  .badge { position: absolute; right: -8px; top: -8px; background: var(--step); color: #fff; width: 20px; height: 20px; border-radius: 50%;
+           font-size: 12px; font-weight: 700; display: none; align-items: center; justify-content: center; }
+  .node.on .badge { display: flex; }
+  #detail { flex: 1 1 320px; min-width: 300px; max-width: 460px; position: sticky; top: 12px; }
+  #detail h2 { margin: 0 0 4px; font-size: 16px; }
+  #detail dl { margin: 10px 0 0; }
+  #detail dt { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-top: 8px; }
+  #detail dd { margin: 2px 0 0; }
+  #detail code, td code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--dim); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  /* tables and bars */
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 14px; background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; display: flex; }
+  .bar > div { height: 100%; }
+  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; }
+  .gauge .val { font-size: 22px; font-weight: 650; }
+  .gauge .bar { margin: 8px 0 6px; }
+  .tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px; border: 1px solid var(--line); color: var(--dim); }
+  .tag.measured { color: var(--green); border-color: var(--green); }
+  .tag.est { color: var(--amber); border-color: var(--amber); }
+  .tag.none { color: var(--red); border-color: var(--red); }
+  label.ctl { display: block; margin: 10px 0 2px; }
+  input[type=range] { width: 100%; }
+  .legendbar span { display: inline-flex; align-items: center; margin-right: 12px; font-size: 12px; }
+  .legendbar i { width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; display: inline-block; }
+  .timeline { position: relative; height: 18px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; margin: 4px 0 10px; }
+  .timeline div { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+  .timeline div.slow { background: var(--amber); }
+  .timeline div.limit { background: var(--red); width: 3px; }
+  footer { padding: 0 24px 30px; color: var(--dim); font-size: 12px; max-width: 1280px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>JoyC controller + RoverC receiver: software architecture and resource usage</h1>
+  <p>Two M5StickC PLUS devices, PlatformIO / Arduino (espressif32 6.10.0), encrypted ESP-NOW. Click anything that looks clickable.</p>
+</header>
+<nav id="tabs">
+  <button data-tab="arch" class="active">Architecture</button>
+  <button data-tab="runtime">Runtime and protocol</button>
+  <button data-tab="res">Resources</button>
+  <button data-tab="safety">Safety and faults</button>
+</nav>
+<main>
+
+<section class="tab active" id="tab-arch">
+  <p class="muted">Pick a data flow to highlight the modules it passes through, in order, or click a module for its details.</p>
+  <div class="chips" id="flows"></div>
+  <div class="legend">
+    <span><i style="background:var(--amber)"></i>Hardware</span>
+    <span><i style="background:var(--accent)"></i>Library in this repo</span>
+    <span><i style="background:var(--green)"></i>Application</span>
+    <span><i style="background:#a371f7"></i>Third-party / framework</span>
+    <span><i style="background:var(--red)"></i>Radio link</span>
+  </div>
+  <div class="row">
+    <div class="arch" id="arch"></div>
+    <div class="card" id="detail"></div>
+  </div>
+</section>
+
+<section class="tab" id="tab-runtime">
+  <div class="row">
+    <div class="card" style="flex:1 1 560px">
+      <h2 style="margin-top:0">Periodic work</h2>
+      <p class="muted small">All of it runs cooperatively in the Arduino <code>loop()</code> task of each device. Values are the constants in <code>ProjectConfig.h</code> and <code>ControlCore.h</code>.</p>
+      <table id="schedule"></table>
+    </div>
+    <div class="card" style="flex:1 1 420px">
+      <h2 style="margin-top:0">Timeouts on one axis (0 to 400 ms)</h2>
+      <p class="muted small">Blue: periods. Amber: slower rates. Red: limits that disarm.</p>
+      <div id="timelines"></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:18px">
+    <div class="card" style="flex:1 1 520px">
+      <h2 style="margin-top:0">Packet (28 bytes, same layout both ways)</h2>
+      <p class="muted small">Encoded by <code>control::encode</code> in <code>lib/ControlCore</code>. Radio callbacks only copy bytes into a one-slot mailbox; nothing else happens in the callback.</p>
+      <table id="packet"></table>
+    </div>
+    <div class="card" style="flex:1 1 420px">
+      <h2 style="margin-top:0">Arming handshake</h2>
+      <ol id="handshake" style="margin:0;padding-left:20px"></ol>
+    </div>
+  </div>
+</section>
+
+<section class="tab" id="tab-res">
+  <div class="chips" id="roles"></div>
+  <div class="gauges" id="gauges"></div>
+  <div class="row">
+    <div class="card" style="flex:1 1 560px">
+      <h2 style="margin-top:0">Linked sections</h2>
+      <p class="muted small">From <code>xtensa-esp32-elf-size -A</code> on the release <code>firmware.elf</code>. Click a row for what lives there.</p>
+      <table id="sections"></table>
+    </div>
+    <div class="card" style="flex:1 1 520px">
+      <h2 style="margin-top:0">Where the code comes from <span class="tag est">approximate</span></h2>
+      <p class="muted small">Symbols from <code>nm -S -C</code> grouped by name. Plain-C and Wi-Fi/ESP-IDF symbols carry no namespace and land in "ESP-IDF and system", so the library groups are lower bounds.</p>
+      <div class="bar" id="groupbar" style="height:20px"></div>
+      <div class="legendbar" id="grouplegend" style="margin:8px 0"></div>
+      <table id="groups"></table>
+    </div>
+  </div>
+  <div class="row" style="margin-top:18px">
+    <div class="card" style="flex:1 1 520px">
+      <h2 style="margin-top:0">Runtime load calculator <span class="tag est">estimates</span></h2>
+      <label class="ctl">Command rate: <b id="rateOut"></b> Hz <input id="rate" type="range" min="10" max="100" step="5" value="50"></label>
+      <label class="ctl">Display refresh: <b id="dispOut"></b> ms <input id="disp" type="range" min="100" max="1000" step="50" value="200"></label>
+      <label class="ctl">Display SPI clock (assumed): <b id="spiOut"></b> MHz <input id="spi" type="range" min="10" max="80" step="5" value="40"></label>
+      <table id="load" style="margin-top:10px"></table>
+    </div>
+    <div class="card" style="flex:1 1 420px">
+      <h2 style="margin-top:0">Not measured yet</h2>
+      <ul style="margin:0;padding-left:18px">
+        <li>Free heap at runtime. Each <code>STAT</code> serial line prints <code>heap</code> and <code>minHeap</code>.</li>
+        <li>CPU load. <code>gapMax</code> (longest control-loop gap) and <code>dispMax</code> (longest redraw, controller) are logged every second.</li>
+        <li>Task stack headroom, Wi-Fi/lwIP buffer use, current draw.</li>
+      </ul>
+      <p class="muted small">Capture them with <code>platformio device monitor -b 115200 -f log2file</code> during a drive (see README, "Debug log").</p>
+    </div>
+  </div>
+</section>
+
+<section class="tab" id="tab-safety">
+  <div class="chips" id="sides"></div>
+  <div class="row">
+    <div class="card" style="flex:1 1 700px">
+      <h2 style="margin-top:0">Why the system disarms</h2>
+      <table id="reasons"></table>
+    </div>
+    <div class="card" style="flex:1 1 320px">
+      <h2 style="margin-top:0">Fault codes</h2>
+      <table id="faults"></table>
+      <p class="muted small" style="margin-bottom:0">Bus and Configuration faults latch until reboot. Link and LocalStop clear after a fresh deliberate arm.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer>
+  Measured on 2026-11-08 from the release builds of the working tree (controller image 950,464 B, rover 943,456 B). Numbers marked
+  "estimate" are computed from the constants shown, not measured on hardware. Regenerate the raw figures with
+  <code>scripts/resource_report.py</code>.
+</footer>
+
+<script>
+"use strict";
+const fmt = n => n.toLocaleString("en-US");
+const kb = n => (n / 1024).toFixed(1) + " KB";
+const pct = (a, b) => (100 * a / b).toFixed(1) + "%";
+
+/* ---------- data ---------- */
+const NODES = {
+  "c-joyc": { side: "c", cls: "hw", title: "JoyC HAT", sub: "2 sticks + clicks, I2C 0x38",
+    what: "Two analog sticks and their click buttons, read over I2C.",
+    facts: { "Bus": "I2C 0x38, SDA GPIO0, SCL GPIO26, 100 kHz", "Axes": "4 raw bytes 0..200 (full forward was seen as 201)", "Buttons": "bit mask: left click 0x10, right click 0x01" } },
+  "c-hw": { side: "c", cls: "lib", title: "Hardware (Hat)", sub: "checked I2C driver",
+    files: ["lib/Hardware/Hardware.h", "lib/Hardware/Hardware.cpp"],
+    what: "Bounded I2C transactions with error codes. Rejects short reads and axes above AxisMaximum + 10 (clamps small overshoot).",
+    facts: { "Used for": "<code>joy()</code> on the controller, <code>motors()</code> and <code>servo()</code> on the rover", "Errors": "Wire status 1..5, 100 queue, 101 short read, 102 axis range, 103 bad argument", "Counters": "<code>failures()</code>, <code>lastError()</code>", "Timeout": "<code>Wire.setTimeOut(10)</code> ms" } },
+  "c-core": { side: "c", cls: "lib", title: "ControlCore (portable)", sub: "shaping, gestures, codec",
+    files: ["lib/ControlCore/ControlCore.h", "lib/ControlCore/ControlCore.cpp"],
+    what: "Pure C++ logic with no Arduino dependency, covered by 10 native Unity tests.",
+    facts: { "On the controller": "<code>shapeAxis</code> (deadzone, calibration, inversion), <code>ArmGesture</code> (neutral 300 ms + hold A 1 s), <code>Clicks</code>, <code>encode/decode</code>", "Size": "about 1.1 KB of code in the controller image" } },
+  "c-app": { side: "c", cls: "app", title: "controller/main.cpp", sub: "loop, arming, calibration",
+    files: ["src/controller/main.cpp"],
+    what: "Runs the 20 ms control tick, owns the arm/disarm state, logs every disarm with its reason.",
+    facts: { "Tick": "read joystick (retry once), shape axes, arm gesture, build and send one command packet", "Joystick dropouts": "under 100 ms: neutral motion, stay armed; longer: disarm", "Buttons": "A arms/disarms, B cycles speed cap 30/50 % and, held 2 s, calibrates" } },
+  "c-radio": { side: "c", cls: "lib", title: "RadioLink", sub: "ESP-NOW wrapper",
+    files: ["lib/RadioLink/RadioLink.h", "lib/RadioLink/RadioLink.cpp"],
+    what: "Encrypted unicast to one configured peer. One send outstanding at a time, one-slot receive mailbox, counters for diagnostics.",
+    facts: { "Counters": "received, dropped, overwritten, sent, busy, failed, ackOk, ackFail", "Config": "channel, both MACs and both keys come from <code>LocalConfig.h</code> (not in Git)" } },
+  "c-ui": { side: "c", cls: "app", title: "Display (dashboard)", sub: "DisplayUi.h + 135x240 sprite",
+    files: ["include/DisplayUi.h"],
+    what: "Portrait dashboard drawn into a 16-bit off-screen sprite, pushed once per refresh.",
+    facts: { "Sprite": "135 x 240 x 2 B = 64,800 B, allocated before Wi-Fi; falls back to direct drawing", "Refresh": "5 Hz (200 ms)" } },
+  "c-m5": { side: "c", cls: "ext", title: "M5Unified / M5GFX", sub: "buttons, power, LCD",
+    what: "Board detection, AXP192 power, button debouncing and the ST7789 display driver (M5Unified 0.2.7, M5GFX 0.2.36).",
+    facts: { "Cost": "largest third-party code in the image, see Resources" } },
+  "c-nvs": { side: "c", cls: "ext", title: "Preferences (NVS)", sub: "saved stick centers",
+    what: "Stores the four calibrated stick centers in flash so calibration survives power-off." },
+  "c-log": { side: "c", cls: "app", title: "DebugLog (serial)", sub: "DISARM / STAT lines",
+    files: ["include/DebugLog.h"],
+    what: "Timestamped one-line log over USB serial at 115200 baud: BOOT, ARM, DISARM with reason, JOY FAIL, and a STAT line every second." },
+  "link": { side: "m", cls: "link", title: "ESP-NOW link", sub: "encrypted unicast, channel 1",
+    what: "Direct device-to-device frames, no router. PMK and LMK keys are set at build time.",
+    facts: { "Command": "controller to rover, 28 B at 50 Hz", "Status": "rover to controller, 28 B at 10 Hz", "Range, latency": "not measured" } },
+  "r-radio": { side: "r", cls: "lib", title: "RadioLink", sub: "ESP-NOW wrapper",
+    files: ["lib/RadioLink/RadioLink.cpp"], what: "Same library as on the controller, started in receiver mode." },
+  "r-core": { side: "r", cls: "lib", title: "ControlCore (portable)", sub: "Safety, mix, Ramp",
+    files: ["lib/ControlCore/ControlCore.cpp"],
+    what: "Rover side of the shared logic.",
+    facts: { "Safety": "accepts only fresh, valid, in-order commands from the paired controller; zero-motion after 250 ms without one", "mix()": "mecanum mixing, order front-left, front-right, rear-left, rear-right, capped to the speed cap", "Ramp": "acceleration limit, bypassed on stop" } },
+  "r-app": { side: "r", cls: "app", title: "rover/main.cpp", sub: "control tick, safety, status",
+    files: ["src/rover/main.cpp"],
+    what: "Runs the 20 ms control tick, applies wheel speeds, sends status every 100 ms, zeroes motors every tick while disarmed.",
+    facts: { "Local stop": "button A on the rover", "Latching faults": "any I2C failure latches Fault 3 (Bus) until reboot" } },
+  "r-hw": { side: "r", cls: "lib", title: "Hardware (Hat)", sub: "checked I2C driver",
+    files: ["lib/Hardware/Hardware.cpp"], what: "Writes four wheel speeds (register 0x00) and servo angles (0x10 + channel), with error codes." },
+  "r-roverc": { side: "r", cls: "hw", title: "RoverC base", sub: "STM32 motor driver, 4 wheels, servo",
+    what: "Holds the last motor command. Software cannot guarantee a stop if the stick resets or the bus breaks, so keep the power switch reachable.",
+    facts: { "Bus": "I2C 0x38, SDA GPIO0, SCL GPIO26", "Gripper": "servo channel 0, open 15, close 80 degrees (local config)" } },
+  "r-ui": { side: "r", cls: "app", title: "Display (wheel view)", sub: "DisplayUi.h + 135x240 sprite",
+    files: ["include/DisplayUi.h"],
+    what: "Top-down car with a speed bar and number per wheel, state word, last disarm reason and reset reason." },
+  "r-m5": { side: "r", cls: "ext", title: "M5Unified / M5GFX", sub: "buttons, power, LCD",
+    what: "Same third-party stack as the controller." },
+  "r-log": { side: "r", cls: "app", title: "DebugLog (serial)", sub: "DISARM / STAT lines",
+    files: ["include/DebugLog.h"], what: "BOOT with reset reason (BROWNOUT, PANIC, ...), ARMED, DISARM with reason, I2C FAIL, STAT every second." }
+};
+const LAYOUT = {
+  c: ["c-joyc", "c-hw", "c-core", "c-app", "c-radio", "c-ui", "c-m5", "c-nvs", "c-log"],
+  m: ["link"],
+  r: ["r-roverc", "r-hw", "r-core", "r-app", "r-radio", "r-ui", "r-m5", "r-log"]
+};
+const FLOWS = {
+  command: { label: "Drive command", steps: [
+    ["c-joyc", "Sticks move; raw axes are read over I2C"], ["c-hw", "Read with one retry; range-checked"],
+    ["c-app", "Shapes the axes (deadzone, calibration, inversion to -100..100), runs the arm gesture, sets speed cap and gripper"],
+    ["c-core", "encode() packs the command into 28 bytes"],
+    ["c-radio", "Sends it at 50 Hz"], ["link", "Encrypted ESP-NOW"], ["r-radio", "Callback copies bytes into the mailbox"],
+    ["r-core", "decode(), Safety validates, mix() turns motion into four wheel speeds"], ["r-app", "Ramp, cap clamp, 20 ms tick"],
+    ["r-hw", "Four speeds written to register 0x00"], ["r-roverc", "Motors turn"] ] },
+  status: { label: "Rover status", steps: [
+    ["r-app", "Armed state, fault, ack of last command"], ["r-radio", "Sends 28 B at 10 Hz"], ["link", "Encrypted ESP-NOW"],
+    ["c-radio", "Mailbox"], ["c-app", "linked() needs status and ack progress within 300 ms; a rover fault or new boot id disarms"] ] },
+  display: { label: "Display", steps: [
+    ["c-app", "State and values every 200 ms"], ["c-ui", "Draw dashboard into the sprite"], ["c-m5", "Push sprite to the LCD over SPI"],
+    ["r-app", "State, wheel speeds every 200 ms"], ["r-ui", "Draw wheel view"], ["r-m5", "Push sprite to the LCD"] ] },
+  calibration: { label: "Calibration", steps: [
+    ["c-joyc", "Hold B 2 s, sticks released"], ["c-hw", "50 samples"], ["c-app", "Checks stability and plausible centers"],
+    ["c-nvs", "Saves centers to flash"] ] },
+  debug: { label: "Debug log", steps: [
+    ["c-app", "DISARM reason, STAT every second"], ["c-log", "Serial 115200 on COM7"], ["r-app", "DISARM reason, I2C FAIL, STAT"], ["r-log", "Serial 115200 on COM8"] ] }
+};
+const SCHEDULE = [
+  ["Control tick", "controller", "20 ms (50 Hz)", "Read joystick, shape, arm gesture, send command", "settings::ControlInterval"],
+  ["Control tick", "rover", "20 ms (50 Hz)", "Take command, safety checks, write motors (zeros while disarmed)", "settings::ControlInterval"],
+  ["Status send", "rover", "100 ms (10 Hz)", "Armed, fault, ack", "settings::StatusInterval"],
+  ["Display", "both", "200 ms (5 Hz)", "Redraw sprite and push to LCD", "settings::DisplayInterval"],
+  ["Servo update", "rover", "50 ms minimum", "Gripper target, only while armed", "settings::ServoInterval"],
+  ["STAT log line", "both", "1000 ms", "Link, I2C and heap counters", "main.cpp"],
+  ["Joystick dropout grace", "controller", "100 ms", "Neutral motion instead of disarm", "settings::JoyGrace"],
+  ["Command timeout", "rover", "250 ms", "No fresh valid command: stop and Link fault", "control::CommandTimeout"],
+  ["Status timeout", "controller", "300 ms", "No status or ack progress: disarm", "control::StatusTimeout"],
+  ["Arm gesture", "controller", "300 ms neutral + 1 s hold A", "Deliberate arming", "ArmGesture"]
+];
+const TIMELINE = [
+  { label: "Controller", items: [[20, "control 20"], [100, "grace 100", "slow"], [200, "display 200", "slow"], [300, "status timeout 300", "limit"]] },
+  { label: "Rover", items: [[20, "control 20"], [100, "status 100", "slow"], [200, "display 200", "slow"], [250, "command timeout 250", "limit"]] }
+];
+const PACKET = [
+  ["0..2", "magic 'RC', version 1", "Bytes 0x52 0x43 0x01; anything else is dropped"],
+  ["3", "kind", "Command (1) or Status (2)"],
+  ["4..7", "sender boot id", "Random per boot; a change means the peer rebooted"],
+  ["8..11", "receiver boot id", "0 until the first status has been seen"],
+  ["12..15", "sequence", "Wrap-safe; old or duplicate packets are ignored"],
+  ["16..19", "acknowledgement", "Last command sequence the rover accepted"],
+  ["20..22", "sideways, forward, turn", "Each -100..100, stored +100"],
+  ["23", "speed cap", "30, 50 or 60 %"],
+  ["24", "enabled", "Arm request (command) or armed (status)"],
+  ["25", "gripper", "Hold, Open or Close target"],
+  ["26", "fault", "Rover fault code (status); must be 0 in commands"],
+  ["27", "reserved", "Must be zero"]
+];
+const HANDSHAKE = [
+  "The rover sends motor zero at boot. Both devices start disarmed and never arm on their own.",
+  "The rover sends status; the controller learns the rover boot id and becomes <b>linked</b> (status and ack progress under 300 ms).",
+  "With sticks neutral for 300 ms and button A held for 1 s, the controller sets <code>enabled</code> in its commands (<code>ARM requested</code>).",
+  "The rover accepts the arm only if its previous command was a neutral disarm, the arm packet itself has neutral sticks and it has no fault.",
+  "The rover's status then carries <code>enabled</code> with an ack of the arm command; the controller logs <code>ARM confirmed</code> and starts sending motion.",
+  "Any link loss, fault, joystick failure or either button A press drops back to disarmed; arming again needs a fresh gesture."
+];
+const FAULTS = [["0", "None", "green"], ["1", "Link", "amber"], ["2", "LocalStop", "amber"], ["3", "Bus (I2C)", "red"], ["4", "Configuration", "red"]];
+const REASONS = [
+  ["c", "status timeout", "No rover status for 300 ms", "Radio loss, rover off, interference"],
+  ["c", "ack stalled", "Status arrives but the rover stopped acknowledging commands for 300 ms", "Rover not accepting commands (stale session, rejects)"],
+  ["c", "joy read failed", "Joystick I2C read failed for longer than 100 ms", "I2C error, or an axis above 200 + 10"],
+  ["c", "rover fault", "Rover reports a fault", "See fault codes"],
+  ["c", "rover rebooted", "Status carries a new rover boot id", "Brownout, crash or power cycle of the rover"],
+  ["c", "rover refused", "Rover acknowledged the arm request but is not enabled", "Rover had a fault or the neutral handshake was missed"],
+  ["c", "not calibrated / calibrating / no rover status / rx mismatch / radio not ready / motion locked", "Readiness precondition missing", "Configuration or first-boot state"],
+  ["c", "button A", "Button A pressed while armed", "Deliberate stop"],
+  ["c", "calibration", "Calibration started", "Deliberate"],
+  ["r", "cmd timeout", "No accepted command for 250 ms", "Radio loss or controller disarm path stalled"],
+  ["r", "button A", "Local stop button on the rover", "Deliberate stop"],
+  ["r", "i2c fault", "Motor or servo write failed (latches Fault 3)", "Bus noise, loose HAT, power sag"],
+  ["r", "config", "Radio not ready or motion not commissioned", "Configuration"],
+  ["r", "peer changed", "Command from a different controller boot", "Controller reboot"],
+  ["r", "cmd disarm", "Controller sent an explicit disarm", "Controller-side reason, see the controller footer"]
+];
+/* Measured with xtensa-esp32-elf-size and nm on the release builds, 2026-11-08. */
+const RES = {
+  controller: {
+    bin: 950464,
+    sections: { ".flash.text": 668827, ".flash.rodata": 163852, ".iram0.text": 84583, ".dram0.data": 25596, ".dram0.bss": 22480, ".phyiram": 6173, ".iram0.vectors": 1027, ".flash.appdesc": 256 },
+    groups: { "ESP-IDF and system": { code: 602335, data: 33185, bss: 20651 }, "M5GFX": { code: 48766, data: 3664, bss: 500, other: 8230 },
+      "M5Unified": { code: 12931, data: 8762, bss: 52, other: 1902 }, "Arduino core": { code: 12675, data: 313, bss: 451, other: 403 },
+      "Application": { code: 4063, data: 141, bss: 870, other: 255 }, "ControlCore": { code: 1097 }, "RadioLink": { code: 598, bss: 4 }, "Hardware": { code: 264 } },
+    ctlI2cBytes: 8, ctlI2cLabel: "joystick read (write 2 B + read 6 B)"
+  },
+  rover: {
+    bin: 943456,
+    sections: { ".flash.text": 664531, ".flash.rodata": 161256, ".iram0.text": 84583, ".dram0.data": 25484, ".dram0.bss": 22344, ".phyiram": 6173, ".iram0.vectors": 1027, ".flash.appdesc": 256 },
+    groups: { "ESP-IDF and system": { code: 601216, data: 33068, bss: 20651 }, "M5GFX": { code: 48432, data: 3664, bss: 500, other: 7536 },
+      "M5Unified": { code: 12927, data: 8762, bss: 52, other: 1902 }, "Arduino core": { code: 11299, data: 262, bss: 451, other: 403 },
+      "Application": { code: 2998, data: 96, bss: 737, other: 196 }, "ControlCore": { code: 1465 }, "RadioLink": { code: 598, bss: 4 }, "Hardware": { code: 308 } },
+    ctlI2cBytes: 6, ctlI2cLabel: "motor write (addr + reg + 4 B)"
+  }
+};
+const LIMITS = { app: 1310720, dram: 327680, iram: 131072 };
+const SECTION_INFO = {
+  ".flash.text": "Code executed from flash through the cache: Wi-Fi, ESP-NOW, lwIP, Arduino, M5GFX, M5Unified and this project.",
+  ".flash.rodata": "Read-only data in flash: fonts, string literals, tables.",
+  ".iram0.text": "Code that must live in IRAM (interrupt handlers, flash-safe Wi-Fi paths). IRAM is 128 KB.",
+  ".iram0.vectors": "Interrupt vector table.",
+  ".dram0.data": "Initialized globals, copied from flash to RAM at boot.",
+  ".dram0.bss": "Zero-initialized globals. Heap, task stacks and the 64,800 B display sprite are allocated at run time on top of this.",
+  ".phyiram": "Wi-Fi PHY code kept in IRAM.",
+  ".flash.appdesc": "Application descriptor (version, ELF hash)."
+};
+const COLORS = ["#4da3ff", "#2fc77a", "#ffb020", "#a371f7", "#e5484d", "#18c1c9", "#f2711c", "#8892a0"];
+
+/* ---------- tabs ---------- */
+document.querySelectorAll("#tabs button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("active", s.id === "tab-" + b.dataset.tab));
+  if (b.dataset.tab === "arch") drawEdges();
+}));
+function chips(el, items, current, onPick) {
+  el.innerHTML = "";
+  items.forEach(([id, label]) => {
+    const c = document.createElement("button");
+    c.className = "chip" + (id === current ? " active" : "");
+    c.textContent = label;
+    c.addEventListener("click", () => onPick(id));
+    el.appendChild(c);
+  });
+}
+
+/* ---------- architecture ---------- */
+let flow = null, selected = "c-app";
+function renderArch() {
+  const host = document.getElementById("arch");
+  const heads = { c: "Controller (JoyC on M5StickC PLUS)", m: "Radio", r: "Rover (RoverC Pro on M5StickC PLUS)" };
+  const steps = flow ? FLOWS[flow].steps : [];
+  host.className = "arch" + (flow ? " dim" : "");
+  host.innerHTML = "";
+  ["c", "m", "r"].forEach(col => {
+    const div = document.createElement("div");
+    div.className = "col " + col;
+    div.innerHTML = "<h3>" + heads[col] + "</h3>";
+    LAYOUT[col].forEach(id => {
+      const n = NODES[id];
+      const used = steps.map((s, i) => s[0] === id ? i + 1 : 0).filter(Boolean);
+      const el = document.createElement("div");
+      el.dataset.id = id;
+      el.className = "node " + n.cls + (used.length ? " on" : "") + (id === selected ? " sel" : "") +
+        (!flow && id !== selected && neighbors(selected).some(x => x[0] === id) ? " nb" : "");
+      el.innerHTML = "<b>" + n.title + "</b><span>" + n.sub + "</span><div class=\"badge\">" + (used[0] || "") + "</div>";
+      el.addEventListener("click", () => { selected = id; renderArch(); renderDetail(); });
+      div.appendChild(el);
+    });
+    host.appendChild(div);
+  });
+  drawEdges();
+  chips(document.getElementById("flows"), [[null, "No highlight"], ...Object.entries(FLOWS).map(([k, v]) => [k, v.label])], flow,
+    id => { flow = id; renderArch(); renderDetail(); });
+}
+function renderDetail() {
+  const n = NODES[selected];
+  const step = flow ? FLOWS[flow].steps.findIndex(s => s[0] === selected) : -1;
+  let html = "<h2>" + n.title + "</h2><div class=\"muted\">" + n.sub + "</div><p>" + n.what + "</p>";
+  if (step >= 0) html += "<p><b>In \"" + FLOWS[flow].label + "\" (step " + (step + 1) + "):</b> " + FLOWS[flow].steps[step][1] + "</p>";
+  html += "<dl>";
+  if (n.files) html += "<dt>Source</dt><dd>" + n.files.map(f => "<code>" + f + "</code>").join("<br>") + "</dd>";
+  Object.entries(n.facts || {}).forEach(([k, v]) => html += "<dt>" + k + "</dt><dd>" + v + "</dd>");
+  const links = neighbors(selected);
+  if (links.length) {
+    html += "<dt>Connects to</dt><dd>" + links.map(([id, label]) =>
+      "<a href=\"#\" data-go=\"" + id + "\" style=\"color:var(--accent)\">" + NODES[id].title + "</a> <span class=\"muted\">" + label + "</span>").join("<br>") + "</dd>";
+  }
+  html += "</dl>";
+  if (flow) {
+    html += "<dt style=\"margin-top:14px;color:var(--dim);font-size:12px;text-transform:uppercase\">" + FLOWS[flow].label + " path</dt><ol style=\"padding-left:20px;margin:6px 0 0\">";
+    FLOWS[flow].steps.forEach(([id, text], i) => html += "<li" + (id === selected ? " style=\"font-weight:650\"" : "") + ">" + NODES[id].title + ": " + text + "</li>");
+    html += "</ol>";
+  }
+  document.getElementById("detail").innerHTML = html;
+  document.querySelectorAll("#detail [data-go]").forEach(a => a.addEventListener("click", ev => {
+    ev.preventDefault(); selected = a.dataset.go; renderArch(); renderDetail();
+  }));
+}
+
+/* Interactions between modules: [from, to, what passes between them, kind]. */
+const EDGES = [
+  ["c-joyc", "c-hw", "I2C reads, 50 Hz", "bus"],
+  ["c-hw", "c-app", "joystick state, I2C error counters", "call"],
+  ["c-app", "c-core", "shapeAxis, ArmGesture, Clicks", "call"],
+  ["c-core", "c-radio", "encode / decode of 28 B packets", "call"],
+  ["c-app", "c-radio", "send(), receive(), stats()", "call"],
+  ["c-radio", "link", "ESP-NOW frames", "radio"],
+  ["c-app", "c-ui", "state and values to draw", "call"],
+  ["c-ui", "c-m5", "pushSprite to the LCD (SPI)", "call"],
+  ["c-app", "c-m5", "M5.update(), buttons A and B", "call"],
+  ["c-app", "c-nvs", "stick centers load/save", "call"],
+  ["c-app", "c-log", "debug::log()", "call"],
+  ["link", "r-radio", "ESP-NOW frames", "radio"],
+  ["r-radio", "r-core", "decode / encode of 28 B packets", "call"],
+  ["r-radio", "r-app", "receive(), send(), stats()", "call"],
+  ["r-core", "r-app", "Safety, mix(), Ramp", "call"],
+  ["r-app", "r-hw", "motors(), servo()", "call"],
+  ["r-hw", "r-roverc", "I2C writes, 50 Hz", "bus"],
+  ["r-app", "r-ui", "state and wheel speeds to draw", "call"],
+  ["r-ui", "r-m5", "pushSprite to the LCD (SPI)", "call"],
+  ["r-app", "r-m5", "M5.update(), button A", "call"],
+  ["r-app", "r-log", "debug::log()", "call"]
+];
+function neighbors(id) {
+  return EDGES.filter(e => e[0] === id || e[1] === id).map(e => [e[0] === id ? e[1] : e[0], e[2]]);
+}
+const sideOf = id => id[0] === "c" ? "c" : id[0] === "r" ? "r" : "m";
+function drawEdges() {
+  const host = document.getElementById("arch");
+  host.querySelectorAll("svg.edges").forEach(s => s.remove());
+  const el = id => host.querySelector(".node[data-id=\"" + id + "\"]");
+  const link = el("link"), radio = el("c-radio");
+  if (!link || !radio || !host.offsetWidth) return;
+  link.style.marginTop = "0px";
+  link.style.marginTop = Math.max(0, radio.getBoundingClientRect().top - link.getBoundingClientRect().top) + "px";
+  const hb = host.getBoundingClientRect();
+  const box = id => { const r = el(id).getBoundingClientRect(); return { l: r.left - hb.left, r: r.right - hb.left, t: r.top - hb.top, h: r.height, cy: r.top - hb.top + r.height / 2 }; };
+  const order = id => LAYOUT[sideOf(id)].indexOf(id);
+  // Same-column edges leave the outer side of a node; spread the anchors so lines do not overlap.
+  const anchors = {};
+  EDGES.forEach((e, i) => {
+    if (sideOf(e[0]) !== sideOf(e[1])) return;
+    [[e[0], e[1]], [e[1], e[0]]].forEach(([a, b]) => (anchors[a] = anchors[a] || []).push({ i, other: b }));
+  });
+  const anchorY = {};
+  Object.entries(anchors).forEach(([id, list]) => {
+    list.sort((x, y) => order(x.other) - order(y.other));
+    const b = box(id);
+    list.forEach((a, k) => { anchorY[a.i + ":" + id] = b.t + b.h * (k + 1) / (list.length + 1); });
+  });
+  const steps = flow ? FLOWS[flow].steps.map(s => s[0]) : [];
+  const flowDir = {};
+  for (let k = 0; k + 1 < steps.length; k++) flowDir[steps[k] + ">" + steps[k + 1]] = true;
+  let paths = "", dots = "";
+  EDGES.forEach((e, i) => {
+    const [a, b, label, kind] = e;
+    const side = sideOf(a);
+    let p1, p2, d;
+    if (side !== sideOf(b)) {
+      const ba = box(a), bb = box(b);
+      const fromLeftToRight = side === "c" || (side === "m" && sideOf(b) === "r");
+      p1 = { x: fromLeftToRight ? ba.r : ba.l, y: ba.cy };
+      p2 = { x: fromLeftToRight ? bb.l : bb.r, y: bb.cy };
+    } else {
+      const out = side === "c" ? -1 : 1;
+      const ba = box(a), bb = box(b);
+      const span = Math.abs(order(a) - order(b));
+      const bulge = Math.min(54, 14 + 9 * (span - 1));
+      p1 = { x: out < 0 ? ba.l : ba.r, y: anchorY[i + ":" + a] };
+      p2 = { x: out < 0 ? bb.l : bb.r, y: anchorY[i + ":" + b] };
+      p1.cx = p1.x + out * bulge; p2.cx = p2.x + out * bulge;
+    }
+    const fwd = flowDir[a + ">" + b], rev = flowDir[b + ">" + a];
+    const inFlow = fwd || rev;
+    const touches = !flow && (a === selected || b === selected);
+    const [s, t] = rev ? [p2, p1] : [p1, p2];
+    d = "M" + s.x + "," + s.y + " C" + (s.cx !== undefined ? s.cx : (s.x + t.x) / 2) + "," + s.y + " " +
+        (t.cx !== undefined ? t.cx : (s.x + t.x) / 2) + "," + t.y + " " + t.x + "," + t.y;
+    const cls = "e " + kind + (inFlow ? " flow" : touches ? " on" : (flow || selected) ? " faint" : "");
+    const tip = NODES[a].title + " - " + NODES[b].title + ": " + label;
+    paths += "<path class=\"" + cls + "\" d=\"" + d + "\"/><path class=\"hit\" d=\"" + d + "\"><title>" + tip + "</title></path>";
+    const dotCls = inFlow || touches ? "on" : "";
+    dots += "<circle class=\"" + dotCls + "\" cx=\"" + p1.x + "\" cy=\"" + p1.y + "\" r=\"3\"/><circle class=\"" + dotCls + "\" cx=\"" + p2.x + "\" cy=\"" + p2.y + "\" r=\"3\"/>";
+  });
+  host.insertAdjacentHTML("afterbegin", "<svg class=\"edges\" width=\"" + hb.width + "\" height=\"" + hb.height + "\">" + paths + dots + "</svg>");
+}
+window.addEventListener("resize", drawEdges);
+window.addEventListener("load", drawEdges);
+
+/* ---------- runtime ---------- */
+function renderRuntime() {
+  document.getElementById("schedule").innerHTML = "<tr><th>Work</th><th>Device</th><th>Period / limit</th><th>What</th><th>Source</th></tr>" +
+    SCHEDULE.map(r => "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td><td>" + r[2] + "</td><td>" + r[3] + "</td><td><code>" + r[4] + "</code></td></tr>").join("");
+  document.getElementById("timelines").innerHTML = TIMELINE.map(t =>
+    "<div>" + t.label + "</div><div class=\"timeline\">" + t.items.map(([ms, label, cls]) =>
+      "<div class=\"" + (cls || "") + "\" style=\"left:" + (ms / 4) + "%\" title=\"" + label + " ms\"></div>").join("") + "</div>" +
+    "<div class=\"small muted\">" + t.items.map(i => i[1]).join(" | ") + " (ms)</div>").join("");
+  document.getElementById("packet").innerHTML = "<tr><th>Bytes</th><th>Field</th><th>Notes</th></tr>" +
+    PACKET.map(r => "<tr><td><code>" + r[0] + "</code></td><td>" + r[1] + "</td><td>" + r[2] + "</td></tr>").join("");
+  document.getElementById("handshake").innerHTML = HANDSHAKE.map(s => "<li style=\"margin-bottom:6px\">" + s + "</li>").join("");
+}
+
+/* ---------- resources ---------- */
+let role = "controller", selectedSection = null;
+function gauge(title, used, total, note, tag) {
+  const p = used / total;
+  const color = p > 0.9 ? "var(--red)" : p > 0.75 ? "var(--amber)" : "var(--green)";
+  return "<div class=\"card gauge\"><div class=\"muted\">" + title + " <span class=\"tag " + tag + "\">" + (tag === "measured" ? "measured" : "estimate") + "</span></div>" +
+    "<div class=\"val\">" + fmt(used) + " <span class=\"muted small\">of " + fmt(total) + " B (" + pct(used, total) + ")</span></div>" +
+    "<div class=\"bar\"><div style=\"width:" + (100 * p).toFixed(1) + "%;background:" + color + "\"></div></div><div class=\"small muted\">" + note + "</div></div>";
+}
+function renderRes() {
+  const r = RES[role];
+  chips(document.getElementById("roles"), [["controller", "Controller"], ["rover", "Rover"]], role, id => { role = id; renderRes(); });
+  const stat = r.sections[".dram0.data"] + r.sections[".dram0.bss"];
+  const iram = r.sections[".iram0.text"] + r.sections[".iram0.vectors"];
+  const sprite = 135 * 240 * 2;
+  document.getElementById("gauges").innerHTML =
+    gauge("Flash: app partition", r.bin, LIMITS.app, "firmware.bin against the 1.25 MB app slot (default partition table)", "measured") +
+    gauge("Static RAM (data + bss)", stat, LIMITS.dram, "Linked globals only; heap and stacks come on top", "measured") +
+    gauge("IRAM code", iram, LIMITS.iram, "Interrupt-safe code, 128 KB region", "measured") +
+    gauge("Static RAM + display sprite", stat + sprite, LIMITS.dram, "Adds the 135 x 240 x 16-bit sprite (64,800 B); Wi-Fi, lwIP and task buffers are still not included", "est");
+  const secs = Object.entries(r.sections).sort((a, b) => b[1] - a[1]);
+  const max = secs[0][1];
+  document.getElementById("sections").innerHTML = "<tr><th>Section</th><th class=\"num\">Bytes</th><th></th></tr>" + secs.map(([n, v]) =>
+    "<tr data-s=\"" + n + "\" style=\"cursor:pointer\"><td><code>" + n + "</code></td><td class=\"num\">" + fmt(v) + "</td><td style=\"width:38%\"><div class=\"bar\"><div style=\"width:" +
+    (100 * v / max).toFixed(1) + "%;background:var(--accent)\"></div></div></td></tr>" +
+    (selectedSection === n ? "<tr><td colspan=\"3\" class=\"muted small\">" + SECTION_INFO[n] + "</td></tr>" : "")).join("");
+  document.querySelectorAll("#sections tr[data-s]").forEach(tr => tr.addEventListener("click", () => {
+    selectedSection = selectedSection === tr.dataset.s ? null : tr.dataset.s; renderRes(); }));
+  const groups = Object.entries(r.groups).map(([n, g]) => [n, g, Object.values(g).reduce((a, b) => a + b, 0)]).sort((a, b) => b[2] - a[2]);
+  const total = groups.reduce((a, g) => a + g[2], 0);
+  document.getElementById("groupbar").innerHTML = groups.map((g, i) => "<div title=\"" + g[0] + ": " + fmt(g[2]) + " B\" style=\"width:" + (100 * g[2] / total) + "%;background:" + COLORS[i % COLORS.length] + "\"></div>").join("");
+  document.getElementById("grouplegend").innerHTML = groups.map((g, i) => "<span><i style=\"background:" + COLORS[i % COLORS.length] + "\"></i>" + g[0] + "</span>").join("");
+  document.getElementById("groups").innerHTML = "<tr><th>Origin</th><th class=\"num\">Code</th><th class=\"num\">Data+bss</th><th class=\"num\">Other</th><th class=\"num\">Total</th></tr>" + groups.map(([n, g, t]) =>
+    "<tr><td>" + n + "</td><td class=\"num\">" + fmt(g.code || 0) + "</td><td class=\"num\">" + fmt((g.data || 0) + (g.bss || 0)) + "</td><td class=\"num\">" + fmt((g.other || 0) + (g.rodata || 0)) +
+    "</td><td class=\"num\">" + fmt(t) + "</td></tr>").join("");
+  renderLoad();
+}
+function renderLoad() {
+  const r = RES[role];
+  const rate = +document.getElementById("rate").value, disp = +document.getElementById("disp").value, spi = +document.getElementById("spi").value;
+  document.getElementById("rateOut").textContent = rate;
+  document.getElementById("dispOut").textContent = disp;
+  document.getElementById("spiOut").textContent = spi;
+  const i2c = r.ctlI2cBytes * 9 * 1.1 / 100000 * rate * 100;
+  const frame = 135 * 240 * 2, frameMs = frame * 8 / (spi * 1e6) * 1000;
+  const rows = [
+    ["Radio payload, command", fmt(28 * rate) + " B/s", "28 B x " + rate + " Hz (frame overhead not counted)"],
+    ["Radio payload, status", fmt(28 * 10) + " B/s", "28 B x 10 Hz"],
+    ["I2C bus load (" + role + ")", i2c.toFixed(1) + " %", r.ctlI2cLabel + ", 100 kHz, 9 bits per byte + 10 % overhead"],
+    ["Display data", fmt(Math.round(frame * 1000 / disp)) + " B/s", "64,800 B frame every " + disp + " ms"],
+    ["Display push time", frameMs.toFixed(1) + " ms", "frame / SPI clock; blocks the loop, compare with the 20 ms control period"],
+    ["Display share of time", (100 * frameMs / disp).toFixed(1) + " %", "push time / refresh interval"],
+    ["Serial log", "about 250 B/s", "one STAT line per second plus events, against 11,520 B/s at 115200 baud"]
+  ];
+  document.getElementById("load").innerHTML = "<tr><th>Quantity</th><th class=\"num\">Value</th><th>Basis</th></tr>" +
+    rows.map(x => "<tr><td>" + x[0] + "</td><td class=\"num\"><b>" + x[1] + "</b></td><td class=\"muted small\">" + x[2] + "</td></tr>").join("");
+}
+["rate", "disp", "spi"].forEach(id => document.getElementById(id).addEventListener("input", renderLoad));
+
+/* ---------- safety ---------- */
+let side = "all";
+function renderSafety() {
+  chips(document.getElementById("sides"), [["all", "Both"], ["c", "Controller"], ["r", "Rover"]], side, id => { side = id; renderSafety(); });
+  document.getElementById("reasons").innerHTML = "<tr><th>Device</th><th>Reason shown on screen and in the log</th><th>Condition</th><th>Typical cause</th></tr>" +
+    REASONS.filter(r => side === "all" || r[0] === side).map(r =>
+      "<tr><td>" + (r[0] === "c" ? "controller" : "rover") + "</td><td><code>" + r[1] + "</code></td><td>" + r[2] + "</td><td class=\"muted\">" + r[3] + "</td></tr>").join("");
+  document.getElementById("faults").innerHTML = "<tr><th>Code</th><th>Name</th></tr>" +
+    FAULTS.map(f => "<tr><td>" + f[0] + "</td><td style=\"color:var(--" + f[2] + ")\">" + f[1] + "</td></tr>").join("");
+}
+
+renderArch(); renderDetail(); renderRuntime(); renderRes(); renderSafety();
+</script>
+</body>
+</html>

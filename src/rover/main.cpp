@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 #include <ProjectConfig.h>
 #include <DisplayUi.h>
+#include <DebugLog.h>
 #include <Hardware.h>
 #include <RadioLink.h>
 #include <algorithm>
@@ -22,11 +23,36 @@ uint32_t lastServo = 0;
 uint32_t statusSequence = 0;
 bool hardwareGood = false;
 bool wasArmed = false;
+uint32_t lastAccepted = 0;
+uint32_t acceptedCount = 0;
+uint32_t rejectedCount = 0;
+uint32_t disarmCount = 0;
+uint32_t lastStat = 0;
+uint32_t lastTick = 0;
+uint32_t maxTickGap = 0;
+const char* lastDisarmReason = nullptr;
+const char* resetReason = "";
+
+void i2cFailed(const char* what) {
+    debug::log("I2C FAIL %s err=%u fails=%lu", what, unsigned(hat.lastError()), debug::ul(hat.failures()));
+}
+
+// Why the rover left the armed state; mirrors the checks in controlTick().
+const char* disarmReason(uint32_t now) {
+    if (M5.BtnA.isPressed()) return "button A";
+    if (!hardwareGood) return "i2c fault";
+    if (!local::MotionCommissioned || !radio.ready()) return "config";
+    if (safety->fault() == control::Fault::Link) {
+        return now - lastAccepted >= control::CommandTimeout ? "cmd timeout" : "peer changed";
+    }
+    return "cmd disarm";
+}
 
 void stopMotors() {
     applied.fill(0);
     ramp.update(applied, false);
     if (!hat.motors(applied)) {
+        i2cFailed("stop");
         hardwareGood = false;
         safety->stop(control::Fault::Bus);
     }
@@ -34,10 +60,19 @@ void stopMotors() {
 
 void controlTick(uint32_t now) {
     M5.update();
+    maxTickGap = std::max(maxTickGap, now - lastTick);
+    lastTick = now;
     control::Packet packet;
     uint32_t received;
     safety->tick(now);
-    if (radio.receive(packet, received)) safety->accept(packet, received, now);
+    if (radio.receive(packet, received)) {
+        if (safety->accept(packet, received, now)) {
+            ++acceptedCount;
+            lastAccepted = now;
+        } else {
+            ++rejectedCount;
+        }
+    }
     if (M5.BtnA.isPressed()) safety->stop(control::Fault::LocalStop);
     if (!local::MotionCommissioned || !radio.ready()) safety->stop(control::Fault::Configuration);
     if (!hardwareGood) safety->stop(control::Fault::Bus);
@@ -51,6 +86,7 @@ void controlTick(uint32_t now) {
             speed = static_cast<int8_t>(std::clamp(int(speed), -int(command.cap), int(command.cap)));
         }
         if (!hat.motors(applied)) {
+            i2cFailed("motors");
             hardwareGood = false;
             safety->stop(control::Fault::Bus);
             stopMotors();
@@ -62,12 +98,39 @@ void controlTick(uint32_t now) {
         const uint8_t target = command.grip == control::Grip::Open ? local::ServoOpen : local::ServoClose;
         if (hat.servo(local::ServoChannel, target)) appliedGrip = command.grip;
         else {
+            i2cFailed("servo");
             hardwareGood = false;
             safety->stop(control::Fault::Bus);
             stopMotors();
         }
     }
-    wasArmed = safety->armed();
+    const bool armedNow = safety->armed();
+    if (armedNow != wasArmed) {
+        if (armedNow) {
+            debug::log("ARMED peer=%08lX cap=%u", debug::ul(safety->peer()), unsigned(command.cap));
+        } else {
+            ++disarmCount;
+            lastDisarmReason = disarmReason(now);
+            debug::log("DISARM reason=%s fault=%u cmdAge=%lu enabled=%d seq=%lu i2cFail=%lu i2cErr=%u",
+                lastDisarmReason, unsigned(safety->fault()), debug::ul(now - lastAccepted), command.enabled,
+                debug::ul(safety->sequence()), debug::ul(hat.failures()), unsigned(hat.lastError()));
+        }
+    }
+    wasArmed = armedNow;
+}
+
+void logStats(uint32_t now) {
+    const auto stats = radio.stats();
+    debug::log("STAT armed=%d fault=%u cmdAge=%lu seq=%lu cap=%u acc=%lu rej=%lu "
+               "rx=%lu drop=%lu over=%lu tx=%lu busy=%lu txFail=%lu ackOk=%lu ackFail=%lu "
+               "i2cFail=%lu i2cErr=%u gapMax=%lu heap=%lu minHeap=%lu",
+        safety->armed(), unsigned(safety->fault()), debug::ul(now - lastAccepted), debug::ul(safety->sequence()),
+        unsigned(safety->command().cap), debug::ul(acceptedCount), debug::ul(rejectedCount),
+        debug::ul(stats.received), debug::ul(stats.dropped), debug::ul(stats.overwritten),
+        debug::ul(stats.sent), debug::ul(stats.busy), debug::ul(stats.failed), debug::ul(stats.ackOk),
+        debug::ul(stats.ackFail), debug::ul(hat.failures()), unsigned(hat.lastError()),
+        debug::ul(maxTickGap), debug::ul(ESP.getFreeHeap()), debug::ul(ESP.getMinFreeHeap()));
+    maxTickGap = 0;
 }
 
 void sendStatus() {
@@ -120,14 +183,23 @@ void display() {
         if (index % 2 == 0) ui::text(g, speed, x - 4, mid, textdatum_t::middle_right, ui::White);
         else ui::text(g, speed, x + 26, mid, textdatum_t::middle_left, ui::White);
     }
-    ui::text(g, label, ui::Width / 2, 220, textdatum_t::middle_center, color);
+    ui::text(g, label, ui::Width / 2, 213, textdatum_t::middle_center, color);
+    char text[28];
+    if (lastDisarmReason) {
+        snprintf(text, sizeof(text), "Off: %s (%lu)", lastDisarmReason, debug::ul(disarmCount));
+        ui::text(g, text, 2, 227, textdatum_t::middle_left, ui::Amber, &fonts::Font0);
+    }
+    snprintf(text, sizeof(text), "rst:%s up:%lus", resetReason, debug::ul(millis() / 1000));
+    ui::text(g, text, 2, 236, textdatum_t::middle_left, ui::Grey, &fonts::Font0);
     if (canvasReady) canvas.pushSprite(0, 0);
 }
 }
 
 void setup() {
+    Serial.setTxBufferSize(1024);
     Serial.begin(115200);
     Serial.println("ROVER: startup");
+    resetReason = debug::resetReason();
     auto config = M5.config();
     config.serial_baudrate = 0;
     config.external_imu = false;
@@ -153,6 +225,9 @@ void setup() {
     safety.reset(new control::Safety(radio.boot()));
     if (!hardwareGood) safety->stop(control::Fault::Bus);
     else if (!local::MotionCommissioned || !radio.ready()) safety->stop(control::Fault::Configuration);
+    debug::log("BOOT rover reset=%s heap=%lu canvas=%d i2c=%d radio=%s boot=%08lX",
+        resetReason, debug::ul(ESP.getFreeHeap()), canvasReady, hardwareGood, radio.error(),
+        debug::ul(radio.boot()));
 }
 
 void loop() {
@@ -168,6 +243,10 @@ void loop() {
     if (now - lastDisplay >= settings::DisplayInterval) {
         lastDisplay = now;
         display();
+    }
+    if (now - lastStat >= 1000) {
+        lastStat = now;
+        logStats(now);
     }
     delay(1);
 }
